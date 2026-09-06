@@ -261,7 +261,7 @@ export default function Dashboard({ userProfile }) {
     <div className="h-screen w-full flex flex-col bg-cyber-black overflow-hidden text-gray-300 font-sans">
       <header className="h-14 border-b border-white/10 flex items-center justify-between px-6 bg-cyber-gray/50 backdrop-blur-md z-50">
         <div className="flex items-center gap-4">
-          <div className="text-xl font-bold tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-neon-blue to-neon-purple drop-shadow-[0_0_10px_rgba(188,19,254,0.5)]">SYNAPSE</div>
+          <div className="text-xl font-bold tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-neon-blue to-neon-purple drop-shadow-[0_0_10px_rgba(188,19,254,0.5)]">SENTINEL</div>
           <div className="px-2 py-0.5 rounded bg-gray-800 border border-gray-700 text-[10px] text-gray-400 font-mono">V.2.0.1 LIVE</div>
         </div>
         <div className="flex gap-3">

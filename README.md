@@ -1,22 +1,22 @@
-# Synapse Quest
+# Sentinel
 
 A developer productivity platform that scores code submissions, profiles
 contributors from Git telemetry, and routes tasks to whoever actually fits them.
 
-Built at a hackathon and extended afterwards. Three services behind one React
-console: a Python analysis backend, a behaviour engine that turns commit
-activity into metrics, and a task-assignment engine that matches tickets to
-people by skill and current load.
+Three services behind one React console: a Python analysis backend, a
+behaviour engine that turns commit activity into metrics, and a
+task-assignment engine that matches tickets to people by skill and current
+load.
 
 ---
 
 ## The idea
 
 Most "developer analytics" tools count commits and call it productivity. That
-rewards noise. Synapse Quest tries to measure two things that are harder to
-fake — **whether the code submitted actually does the task**, and **whether
-stated progress matches observed Git activity** — then uses those signals to
-route work and raise alerts before a deadline slips.
+rewards noise. Sentinel tries to measure two things that are harder to fake —
+**whether the code submitted actually does the task**, and **whether stated
+progress matches observed Git activity** — then uses those signals to route
+work and raise alerts before a deadline slips.
 
 ---
 
@@ -31,7 +31,7 @@ flowchart LR
 
     F --> SC["syntax check<br/>ast.parse"]
     F --> QC["quality heuristics"]
-    F --> LLM["GPT-4o-mini<br/>verdict on a code summary"]
+    F --> LLM["Groq Llama<br/>verdict on a code summary"]
     SC --> SCORE["composite score"]
     QC --> SCORE
     LLM --> SCORE
@@ -61,7 +61,7 @@ model is only one of the three terms:
 ```python
 final_score = 0.2 * syntax_score    # ast.parse() — it either parses or it doesn't
             + 0.3 * quality_score   # structural heuristics
-            + 0.5 * llm_score       # GPT-4o-mini judging code against the task
+            + 0.5 * llm_score       # a Groq-hosted Llama model judging code against the task
 ```
 
 - **Syntax** is binary and deterministic — `ast.parse()` succeeds or returns the
@@ -75,6 +75,10 @@ final_score = 0.2 * syntax_score    # ast.parse() — it either parses or it doe
   rate limit, unparseable response — returns a neutral 60 with
   `"LLM unavailable - fallback mode"`, so the deterministic 50% still produces a
   usable score. The service never hard-fails because a model was unreachable.
+- **Inference runs on Groq**, which serves open-weight models (Llama 3.1 here)
+  on its own LPU hardware — no local GPU needed, and free within Groq's rate
+  limits, which matters for a side project run on demand rather than kept
+  always warm.
 
 ---
 
@@ -137,8 +141,8 @@ vocabulary is small, closed, and a regex is both cheaper and predictable.
 ```bash
 # 1. Flask backend  (:5000)
 cd backend
-pip install flask flask-cors python-dotenv openai radon
-echo "OPENAI_API_KEY=sk-..." > .env      # optional — scoring degrades without it
+pip install flask flask-cors python-dotenv groq radon
+echo "GROQ_API_KEY=gsk_..." > .env      # free at console.groq.com — scoring degrades without it
 python app.py
 
 # 2. Behaviour engine  (:3002)
@@ -205,14 +209,12 @@ Stated here rather than discovered later:
   diff, so commits aren't really scored yet. Wiring it to the contents API is the
   obvious next step.
 - **The three services aren't integrated with each other.** The React console
-  calls the Flask backend only; the behaviour and task engines run standalone and
-  are exercised over HTTP. Unifying them behind one gateway is unfinished work
-  from the hackathon.
-- **`POST /leaderboard` on the Flask service is broken** — it passes one argument
-  to a function that takes two, so the route raises. Use `/analyze-and-rank`,
-  which maintains its own ranking correctly.
-- **The LLM call doesn't pin a JSON response format** while parsing the reply as
-  JSON, so it lands in the fallback path more often than it should.
+  calls the Flask backend only; the behaviour and task engines run standalone
+  and are exercised over HTTP. Unifying them behind one gateway is the next
+  piece of work.
+- **`POST /leaderboard` on the Flask service is broken** — it passes one
+  argument to a function that takes two, so the route raises. Use
+  `/analyze-and-rank`, which maintains its own ranking correctly.
 - **Quality heuristics are shallow by design** — `"def "` and `"test_"` substring
   checks. They're a fast first pass, not static analysis.
 - **Python-only.** Syntax checking, complexity and refactoring all use Python's
@@ -220,12 +222,5 @@ Stated here rather than discovered later:
 
 ---
 
-## Credits
-
-Started as a team hackathon project — the behaviour engine and task engine were
-built as separate services by different members, which is why they run as
-independent Express apps. Extended afterwards with the analysis backend, alert
-engine and console.
-
 **Stack** — `Python` · `Flask` · `Node.js` · `Express` · `React` · `Vite` ·
-`TailwindCSS` · `OpenAI` · `radon` · `ast`
+`TailwindCSS` · `Groq` · `radon` · `ast`

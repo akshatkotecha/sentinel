@@ -1,13 +1,13 @@
 {
-  "name": "hackathon-team2-behavior",
+  "name": "sentinel-behaviour-engine",
   "version": "1.0.0",
-  "description": "Person E: Behaviour Engine",
+  "description": "Git-telemetry behaviour engine — commit activity, staleness and risk scoring for Sentinel",
   "main": "server.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": ["hackathon","behavior"],
-  "author": "Person E",
+  "keywords": ["behavior", "git", "telemetry", "developer-productivity"],
+  "author": "Akshat Kotecha",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {

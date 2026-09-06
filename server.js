@@ -9,7 +9,8 @@ app.use(express.json());
 
 const DATA_FILE = path.join(__dirname, 'behavior.json');
 
-// Sample data for Team D/F integration
+// Seed data so the endpoints below have something to compute against on a
+// fresh checkout, before any real Git activity has been posted in.
 let behaviorData = {
   users: {
     'user1': { commits: 5, lastCommit: Date.now() - 2*60*60*1000, fileEdits: { total: 10, reverts: 1 } },
@@ -19,8 +20,8 @@ let behaviorData = {
 
 // Save/load data
 function saveData() { fs.writeFileSync(DATA_FILE, JSON.stringify(behaviorData, null, 2)); }
-function loadData() { 
-  if (fs.existsSync(DATA_FILE)) behaviorData = JSON.parse(fs.readFileSync(DATA_FILE)); 
+function loadData() {
+  if (fs.existsSync(DATA_FILE)) behaviorData = JSON.parse(fs.readFileSync(DATA_FILE));
 }
 loadData();
 
@@ -30,7 +31,7 @@ function computeMetrics(userId, taskStatus = 'todo') {
 
   const now = Date.now();
   const hoursInactive = (now - user.lastCommit) / (1000 * 60 * 60);
-  
+
   return {
     activity: user.commits / 24,
     staleness: Math.max(0, hoursInactive),
@@ -41,13 +42,14 @@ function computeMetrics(userId, taskStatus = 'todo') {
   };
 }
 
-// Team F: Behavior metrics
+// Derived activity, staleness, speed, accuracy and risk for one user.
 app.get('/behavior/:userId', (req, res) => {
   const metrics = computeMetrics(req.params.userId, req.query.taskStatus);
   res.json(metrics);
 });
 
-// Team D: Update Git data
+// Ingests a Git activity update (commits, file edits, commit timestamps) for
+// one user and persists it to behavior.json.
 app.post('/git/update/:userId', (req, res) => {
   const { userId } = req.params;
   behaviorData.users[userId] = {
@@ -59,7 +61,7 @@ app.post('/git/update/:userId', (req, res) => {
   res.json({ updated: true });
 });
 
-// Team F: Leaderboard
+// Ranks users by a blend of commit volume, recency and edit accuracy.
 app.get('/leaderboard', (req, res) => {
   const scores = Object.entries(behaviorData.users).map(([userId, data]) => ({
     userId,
@@ -68,21 +70,21 @@ app.get('/leaderboard', (req, res) => {
   res.json(scores.slice(0, 5));
 });
 app.get('/', (req, res) => {
-  res.send('Synapse Quest Behavior Engine API Running');
+  res.send('Sentinel Behaviour Engine API Running');
 });
 
 // Health check
-app.get('/health', (req, res) => res.json({ status: 'PERSON E BEHAVIOR ENGINE LIVE', port: 3002 }));
+app.get('/health', (req, res) => res.json({ status: 'BEHAVIOUR ENGINE LIVE', port: 3002 }));
 
 app.listen(3002, () => {
-  console.log('🚀 PERSON E BEHAVIOR ENGINE: http://localhost:3002');
-  console.log('📡 Team D → POST /git/update/user1');
-  console.log('📊 Team F → GET /behavior/user1?taskStatus=in_progress');
+  console.log('🚀 Sentinel Behaviour Engine: http://localhost:3002');
+  console.log('📡 POST /git/update/user1');
+  console.log('📊 GET  /behavior/user1?taskStatus=in_progress');
 });
 
 app.get('/info', (req, res) => {
   res.json({
-    service: "Synapse Quest Behavior Engine",
+    service: "Sentinel Behaviour Engine",
     version: "1.0",
     endpoints: [
       "/health",

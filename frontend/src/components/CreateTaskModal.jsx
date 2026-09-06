@@ -29,7 +29,7 @@ export default function CreateTaskModal({ isOpen, onClose, onClone }) {
 
 
   // --- MOCK AI LOGIC ---
-  // In a real app, this would send the text to Gemini/OpenAI
+  // In a real app, this would send the text to an LLM provider
   const analyzeTaskContent = (text) => {
     const lowerText = text.toLowerCase();
     

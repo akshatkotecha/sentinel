@@ -55,7 +55,7 @@ export default function LoginScreen({ onLogin }) {
             <div className="w-2 h-2 rounded-full bg-neon-blue animate-pulse" />
             PROTOCOL: INITIALIZATION
           </motion.div>
-          <h1 className="text-4xl font-bold text-white tracking-tighter mb-1">SYNAPSE QUEST</h1>
+          <h1 className="text-4xl font-bold text-white tracking-tighter mb-1">SENTINEL</h1>
           <p className="text-gray-500 text-xs font-mono tracking-widest">STEP {step}/4</p>
         </div>
 

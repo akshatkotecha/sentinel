@@ -29,7 +29,7 @@ def analyze_code_for_task(task, code: str):
 
     code_summary = summarize_code(code)
 
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = os.getenv("GROQ_API_KEY")
     llm_result = verify_code_with_llm(task, code_summary, api_key)
     llm_score = llm_result["correctness_score"]
 

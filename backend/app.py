@@ -2,7 +2,11 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-print("DEBUG API KEY:", os.getenv("OPENAI_API_KEY"))
+
+# Whether the key is configured, without printing the key itself — the previous
+# debug line wrote the secret straight to stdout, so it landed in terminal
+# scrollback and any captured logs.
+print("OpenAI key loaded:", bool(os.getenv("OPENAI_API_KEY")))
 
 from flask import Flask, jsonify, request
 from services.code_analysis.code_score_engine import analyze_code_for_task

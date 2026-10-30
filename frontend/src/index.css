@@ -8,6 +8,12 @@ body {
   overflow-x: hidden;
 }
 
+/* Dark, thin scrollbars instead of the browser's white default */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #374151 transparent;
+}
+
 /* The Glass Effect Class */
 .glass-panel {
   background: rgba(19, 19, 31, 0.6);

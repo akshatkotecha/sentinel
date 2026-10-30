@@ -13,3 +13,6 @@ node_modules/
 # Editor
 .vscode/
 .DS_Store
+
+# Build output
+frontend/dist/

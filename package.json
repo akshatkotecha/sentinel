@@ -6,12 +6,19 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": ["behavior", "git", "telemetry", "developer-productivity"],
+  "keywords": [
+    "behavior",
+    "git",
+    "telemetry",
+    "developer-productivity"
+  ],
   "author": "Akshat Kotecha",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@supabase/supabase-js": "^2.118.0",
     "cors": "^2.8.6",
+    "dotenv": "^18.0.9",
     "express": "^4.19.2"
   },
   "devDependencies": {

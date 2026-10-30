@@ -1,64 +1,46 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Sparkles, Bot, Zap, ArrowRight } from 'lucide-react';
+import { TASKS_API, request } from '../api';
 
 export default function CreateTaskModal({ isOpen, onClose, onClone }) {
   const [title, setTitle] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiDecision, setAiDecision] = useState(null); // Stores the Auto-Assignment
+  const [error, setError] = useState('');
 
-  // --- THE "BRAIN" ---
-  // This effect listens to what you type and decides who gets the job.
+  // Asks the task engine who it would assign, as you type.
   useEffect(() => {
     if (!title) {
         setAiDecision(null);
+        setError('');
         return;
     }
 
     setIsAnalyzing(true);
     setAiDecision(null);
+    setError('');
 
-    // Simulate AI Processing Delay (Debounce)
-    const timeoutId = setTimeout(() => {
-        setIsAnalyzing(false);
-        analyzeTaskContent(title);
-    }, 800);
+    let cancelled = false;
+    const timeoutId = setTimeout(async () => {
+        try {
+            const decision = await request(`${TASKS_API}/tasks/suggest`, 'POST', { title });
+            if (!cancelled) setAiDecision(decision);
+        } catch (e) {
+            if (!cancelled) setError(e.message);
+        } finally {
+            if (!cancelled) setIsAnalyzing(false);
+        }
+    }, 500);
 
-    return () => clearTimeout(timeoutId);
+    return () => { cancelled = true; clearTimeout(timeoutId); };
   }, [title]);
-
-
-  // --- MOCK AI LOGIC ---
-  // In a real app, this would send the text to an LLM provider
-  const analyzeTaskContent = (text) => {
-    const lowerText = text.toLowerCase();
-    
-    let decision = { assignee: 'Dev_Sarah', role: 'Backend', confidence: '85%', skill: 'Database' };
-
-    // Keyword Matching
-    if (lowerText.includes('ui') || lowerText.includes('css') || lowerText.includes('button') || lowerText.includes('animation') || lowerText.includes('frontend')) {
-        decision = { assignee: 'Dev_Alex', role: 'Frontend', confidence: '98%', skill: 'React/CSS' };
-    } 
-    else if (lowerText.includes('api') || lowerText.includes('server') || lowerText.includes('database') || lowerText.includes('auth')) {
-        decision = { assignee: 'Dev_Sarah', role: 'Backend', confidence: '99%', skill: 'Node.js' };
-    }
-    else if (lowerText.includes('ai') || lowerText.includes('model') || lowerText.includes('train') || lowerText.includes('data')) {
-        decision = { assignee: 'Dev_Rohan', role: 'AI Eng', confidence: '96%', skill: 'Python/ML' };
-    }
-
-    setAiDecision(decision);
-  };
 
   const handleSubmit = () => {
     if (!title || !aiDecision) return;
-    
-    onClone({
-        title,
-        assignee: aiDecision.assignee,
-        type: aiDecision.role, // Mapping Role to Task Type
-        risk: 'low' // Default risk
-    });
-    
+
+    onClone({ title, requiredSkills: aiDecision.requiredSkills });
+
     // Reset and close
     setTitle('');
     setAiDecision(null);
@@ -129,6 +111,10 @@ export default function CreateTaskModal({ isOpen, onClose, onClone }) {
                         <Zap className="w-4 h-4" />
                         <span>SCANNING SKILL MATRICES...</span>
                     </div>
+                ) : error ? (
+                    <span className="text-xs text-red-400 font-mono">{error}</span>
+                ) : aiDecision && !aiDecision.assignee ? (
+                    <span className="text-xs text-yellow-400 font-mono">NO STRONG MATCH. TASK WILL STAY UNASSIGNED.</span>
                 ) : aiDecision ? (
                     <motion.div 
                         initial={{ opacity: 0, y: 10 }}
@@ -137,24 +123,24 @@ export default function CreateTaskModal({ isOpen, onClose, onClone }) {
                     >
                         <div className="flex justify-between items-center mb-2">
                             <span className="text-xs text-gray-400 font-mono">OPTIMAL ASSIGNMENT FOUND:</span>
-                            <span className="text-xs text-green-400 font-bold font-mono">{aiDecision.confidence} MATCH</span>
+                            <span className="text-xs text-green-400 font-bold font-mono">{Math.round(aiDecision.matchScore * 100)}% MATCH</span>
                         </div>
                         
                         <div className="flex items-center gap-4 bg-white/5 p-3 rounded-lg border border-neon-purple/30">
                             {/* Avatar */}
                             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gray-700 to-black border border-white/20 flex items-center justify-center text-white font-bold">
-                                {aiDecision.assignee.charAt(4)}
+                                {aiDecision.assignee.name.charAt(0)}
                             </div>
                             
                             <div className="flex-1">
                                 <div className="text-white font-bold flex items-center gap-2">
-                                    {aiDecision.assignee}
+                                    {aiDecision.assignee.name}
                                     <span className="text-[10px] bg-neon-blue/20 text-neon-blue px-1.5 py-0.5 rounded border border-neon-blue/30">
-                                        {aiDecision.skill}
+                                        {aiDecision.requiredSkills.join(', ')}
                                     </span>
                                 </div>
                                 <div className="text-xs text-gray-500">
-                                    Role: {aiDecision.role}
+                                    Role: {aiDecision.assignee.role || 'Developer'}
                                 </div>
                             </div>
                             

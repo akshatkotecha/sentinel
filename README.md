@@ -1,199 +1,208 @@
 # Sentinel
 
-A developer productivity platform that scores code submissions, profiles
-contributors from Git telemetry, and routes tasks to whoever actually fits them.
+A developer productivity platform that scores code against a task, compares
+stated progress with Git activity, and routes tickets to whoever fits them.
 
-Three services behind one React console: a Python analysis backend, a
-behaviour engine that turns commit activity into metrics, and a
-task-assignment engine that matches tickets to people by skill and current
-load.
+A React console sits over three small services that share one Supabase Postgres
+database. Most "developer analytics" tools count commits, which rewards noise.
+Sentinel asks two harder questions: **does this submission fit the task**, and
+**does the ticket's status match what Git shows?**
+
+The people and activity in these screenshots are sample data from
+[`supabase/seed_demo.py`](supabase/seed_demo.py). The assignments, alerts and
+scores are computed by the running services, not typed in.
+
+![Mission control](docs/mission-control.png)
 
 ---
 
-## The idea
+## What testing found
 
-Most "developer analytics" tools count commits and call it productivity. That
-rewards noise. Sentinel tries to measure two things that are harder to fake —
-**whether the code submitted actually does the task**, and **whether stated
-progress matches observed Git activity** — then uses those signals to route
-work and raise alerts before a deadline slips.
+The build was tested through its real UI and APIs, which turned up problems that
+reading the code didn't.
+
+| Finding | Evidence |
+|---|---|
+| **The LLM score was close to random.** It saw only signatures, then penalised code for "missing implementation". | The same input scored 0, 70, 30, 0, 50 and 0. After telling the model that bodies are withheld and giving it a scoring guide, matching code scores 90 and unrelated code scores 0 when it responds. |
+| **A "CORS error" was really a threading bug.** Flask's debug page hid a crash, and that page has no CORS headers. | 14 of 48 concurrent requests failed with `httpx.ReadError` on a shared HTTP/2 connection. On HTTP/1.1, 0 of 96 failed. |
+| **Groq intermittently rejects valid requests.** It returns `json_validate_failed` with an empty reply. | Roughly 3 of 5 calls in one run. With retries, 2 of 48 still fall back to the neutral score. |
+| **The dashboard's scroll logic was cutting off the page.** `scrollIntoView` also scrolled the fixed panels on every refresh. | Now only the chat box scrolls, measured at 1600×950 and 1280×620. |
+| **The database lockout works.** Row-level security is on with no public policies. | With the public key, the app sees no users at all. |
 
 ---
 
 ## Architecture
 
 ```mermaid
-flowchart LR
-    UI["React console<br/>Vite · Tailwind"]
+flowchart TD
+    UI["React console :5173<br/>rankings · board · alerts · chat · analyser"]
+    GH["GitHub<br/>signed push events"]
 
-    UI -->|"POST /analyze-and-rank"| F["Flask backend :5000<br/>code analysis · chat · alerts"]
-    UI -->|"POST /chat/send"| F
+    UI -->|"tasks · assignment"| T["Task engine :3000<br/>index.js"]
+    UI -->|"team metrics"| B["Behaviour engine :3002<br/>server.js"]
+    UI -->|"scoring · chat · alerts"| F["Flask backend :5001<br/>backend/app.py"]
+    GH -->|"HMAC verified"| F
+    F -->|"metrics for live alerts"| B
 
-    F --> SC["syntax check<br/>ast.parse"]
-    F --> QC["quality heuristics"]
-    F --> LLM["Groq Llama<br/>verdict on a code summary"]
-    SC --> SCORE["composite score"]
-    QC --> SCORE
-    LLM --> SCORE
-
-    G["Git activity"] -->|"POST /git/update/:userId"| B["Behaviour engine :3002<br/>server.js"]
-    B --> M["activity · staleness · speed<br/>accuracy · mismatch · risk"]
-    M --> AL["alert engine<br/>inactivity · deadline risk · mismatch"]
-
-    T["New ticket"] -->|"POST /tasks/assign"| TA["Task skill engine :3000<br/>index.js"]
-    TA --> ASG["skill match, load tie-break"]
+    T --> DB[("Supabase Postgres<br/>RLS on, secret key only")]
+    B --> DB
+    F --> DB
+    F --> LLM["Groq LLM<br/>sees signatures only"]
 ```
 
-| Service | Runtime | Port | Responsibility |
-|---|---|---|---|
-| `backend/` | Python · Flask | 5000 | Code scoring, chat bot, alert engine, complexity heatmap, auto-refactor |
-| `server.js` | Node · Express | 3002 | Behaviour engine — Git telemetry to per-user metrics, persisted to `behavior.json` |
-| `index.js` | Node · Express | 3000 | Task skill engine — creates tasks, assigns them by skill match |
-| `frontend/` | React · Vite · Tailwind | 5173 | Mission console and code analyser |
+The database is what makes this one product rather than three demos. One service
+creates a user, another ranks them, and a third raises alerts about them, because
+they all read the same tables. The browser never connects to the database, so
+its keys stay on the server.
 
 ---
 
 ## How code gets scored
 
-The part worth reading. A submission is scored by a weighted composite, and the
-model is only one of the three terms:
+A submission gets a weighted composite, and the model is only one term:
 
 ```python
-final_score = 0.2 * syntax_score    # ast.parse() — it either parses or it doesn't
-            + 0.3 * quality_score   # structural heuristics
-            + 0.5 * llm_score       # a Groq-hosted Llama model judging code against the task
+final_score = 0.2 * syntax_score    # ast.parse(): it parses or it doesn't
+            + 0.3 * quality_score   # has functions, isn't a stub, has tests
+            + 0.5 * llm_score       # a Groq-hosted model judging fit to the task
 ```
 
-- **Syntax** is binary and deterministic — `ast.parse()` succeeds or returns the
-  error. No model involved.
-- **Quality** is three structural checks: does it define functions (40), is it
-  more than a stub (30), does it contain tests (30).
-- **The LLM sees a summary, not the source.** Function signatures, class
-  signatures and length are extracted first, and only that goes to the model —
-  cheaper, and the full submission never leaves the machine.
-- **It degrades instead of failing.** Any error in the LLM call — missing key,
-  rate limit, unparseable response — returns a neutral 60 with
-  `"LLM unavailable - fallback mode"`, so the deterministic 50% still produces a
-  usable score. The service never hard-fails because a model was unreachable.
-- **Inference runs on Groq**, which serves open-weight models (Llama 3.1 here)
-  on its own LPU hardware — no local GPU needed, and free within Groq's rate
-  limits, which matters for a side project run on demand rather than kept
-  always warm.
+- **The LLM sees a summary, not the source.** Signatures and length are extracted
+  first, and only those are sent. The database stores the same summary and the
+  score, never the code.
+- **The trade-off is stated.** The model judges whether the signatures fit the
+  task, not whether the code behaves correctly. Well-named broken code can score
+  well on that term.
+- **It degrades instead of failing.** After four attempts, a failed call returns a
+  neutral 60 and says so in the review text.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/code-analyser.png" alt="Code analyser"></td>
+<td width="50%"><img src="docs/leaderboard.png" alt="Leaderboard"></td>
+</tr>
+<tr>
+<td align="center"><em>Each check, with the model's reasoning</em></td>
+<td align="center"><em>Rankings are computed from stored scores on each read</em></td>
+</tr>
+</table>
 
 ---
 
-## The other engines
+## Task routing
 
-### Behaviour metrics — `server.js`
+![Auto-delegate](docs/auto-delegate.png)
 
-Git telemetry per user, turned into signals rather than raw counts:
+The task engine infers required skills from the title, then scores each person on
+`matched skills ÷ required skills`. The highest score wins, and ties go to whoever
+has **fewer open tasks**, so the strongest person doesn't quietly become the
+bottleneck. Below a 0.5 match, the task stays unassigned rather than going to a
+poor fit. The suggestion appears before anything is saved.
+
+---
+
+## Behaviour and alerts
+
+Git activity becomes signals rather than raw counts:
 
 | Metric | Definition |
 |---|---|
-| `activity` | commits ÷ 24 |
-| `staleness` | hours since last commit |
-| `speed` | commits ÷ hours inactive |
-| `accuracy` | 1 − (reverts ÷ total file edits) |
-| `mismatch` | task is `in_progress` but no commit for 4h+ |
-| `riskScore` | staleness band weighted by inaccuracy |
+| `staleness` | Hours since the last commit |
+| `speed` | Commits ÷ hours inactive |
+| `accuracy` | 1 − (reverts ÷ total file edits), so churn doesn't read as productivity |
+| `mismatch` | Task is in progress, but no commit for 4+ hours |
+| `riskScore` | Staleness band weighted by inaccuracy |
 
-`accuracy` is the interesting one: it treats reverts as a negative signal, so
-churning the same file repeatedly doesn't read as productivity.
+[`alert_engine.py`](backend/alert_engine.py) is a pure function over those signals:
 
-### Alerts — `backend/alert_engine.py`
+- **`INACTIVITY`**: no Git activity for 12+ hours
+- **`DEADLINE_RISK`**: under 24 hours to the deadline, with low activity
+- **`PROGRESS_MISMATCH`**: the ticket says in progress, Git says otherwise
 
-A pure function over `(user, behavior, task)` — no I/O, no state, so it's
-trivially testable:
+The GitHub webhook feeds this with real pushes. It rejects anything without a
+valid HMAC signature, records the commit, and scores each changed `.py` file.
 
-- **`INACTIVITY`** — no Git activity for 12h+
-- **`DEADLINE_RISK`** — under 24h to deadline with activity below threshold
-- **`PROGRESS_MISMATCH`** — ticket says in-progress, Git says otherwise
+---
 
-### Task routing — `index.js`
+## Why these technologies
 
-Assignment scores each candidate on `matched skills ÷ required skills`. Highest
-score wins; ties break toward whoever holds **fewer current tasks**, so the
-strongest match doesn't silently become the bottleneck. Below a 0.5 match the
-task stays unassigned rather than going to a poor fit.
-
-### Chat nudges — `backend/bot.py`
-
-A rule-based classifier over standup messages. "almost", "soon", "trying" mark a
-message **vague**; "by EOD", "tonight", "will finish" mark it a **commitment**,
-which gets recorded and checked against later activity. Vague updates get a
-prompt for a blocker or an ETA. Deliberately not a language model — the
-vocabulary is small, closed, and a regex is both cheaper and predictable.
-
-### Complexity heatmap and auto-refactor — `backend/ai_features.py`
-
-- **Heatmap** runs `radon`'s cyclomatic complexity per function and buckets it
-  into low / medium / high (McCabe ≥ 10 is high), pointing at the functions most
-  likely to hide bugs.
-- **Auto-refactor** is an `ast.NodeTransformer` that rewrites
-  `for i in range(len(arr))` into `for item in arr` and unparses the tree back to
-  source — an AST rewrite, not a string substitution, so it can't corrupt
-  surrounding code.
+| Choice | Why it fits |
+|---|---|
+| **React** | Rankings, board, alerts and chat all update from one refresh, and components keep them in step |
+| **Flask** | Scoring relies on Python's `ast` and `radon`, and Flask adds only a thin layer of routes |
+| **Express** | Behaviour and routing are simple JSON services |
+| **Supabase Postgres** | The data is relational, and foreign keys and check constraints enforce the rules even if the code has a bug |
+| **Groq** | Hosted open-weight models with a free tier and no GPU needed |
+| **Rules for chat** | The vocabulary is small and closed, so a keyword list is cheaper and more predictable than a model |
 
 ---
 
 ## Running it
 
 ```bash
-# 1. Flask backend  (:5000)
-cd backend
-pip install flask flask-cors python-dotenv groq radon
-echo "GROQ_API_KEY=gsk_..." > .env      # free at console.groq.com — scoring degrades without it
-python app.py
-
-# 2. Behaviour engine  (:3002)
+# 0. Setup
+cp .env.example .env                    # add your Supabase and Groq keys
 npm install
-node server.js
+(cd frontend && npm install)
+pip install -r backend/requirements.txt
+# In a new Supabase project, run supabase/schema.sql once in the SQL editor
 
-# 3. Task skill engine  (:3000)
-node index.js
+# 1. Start each service in its own terminal
+(cd backend && python app.py)           # :5001
+node server.js                          # :3002
+node index.js                           # :3000
+(cd frontend && npm run dev)            # :5173
 
-# 4. Frontend  (:5173)
-cd frontend
-npm install
-npm run dev
+# 2. Optional: fill an empty database with sample data
+python supabase/seed_demo.py
 ```
 
-The console talks to the Flask service. The two Express engines are exercised
-directly over HTTP:
-
-```bash
-curl -X POST localhost:3002/git/update/user1 \
-     -H 'Content-Type: application/json' \
-     -d '{"commits":7,"fileEdits":{"total":12,"reverts":1}}'
-
-curl localhost:3002/behavior/user1?taskStatus=in_progress
-
-curl -X POST localhost:3000/tasks/create \
-     -H 'Content-Type: application/json' \
-     -d '{"title":"Fix auth redirect","requiredSkills":["backend","node"],"deadline":"2026-01-01"}'
-```
+Then open http://localhost:5173.
 
 ---
 
 ## API
 
-**Flask · :5000**
+**Flask · :5001**
 
 | Method | Route | |
 |---|---|---|
 | `GET` | `/health` | Liveness |
-| `POST` | `/analyze` | Score a submission against a task |
-| `POST` | `/analyze-and-rank` | Score, then update and return the leaderboard |
-| `POST` | `/alerts` | Alerts for a user's behaviour and task state |
+| `POST` | `/analyze` | Score a submission without saving it |
+| `POST` | `/analyze-and-rank` | Score, save, and return the leaderboard |
+| `GET` | `/alerts/live` | Alerts across every open assigned task |
+| `POST` | `/alerts` | Alerts for one behaviour and task state |
+| `POST` | `/leaderboard` | Blend `users_behavior` and `users_code_score` from the request |
 | `POST` | `/bug-heatmap` | Cyclomatic complexity per function |
 | `POST` | `/auto-refactor` | AST-rewritten source |
-| `POST` | `/chat/send` | Post a message, get a bot reply |
-| `GET` | `/chat/messages` · `/chat/commitments` | History and recorded commitments |
-| `POST` | `/github-webhook` | Push-event receiver *(see limitations)* |
+| `POST` | `/chat/send` | Post a message and get a bot reply |
+| `GET` | `/chat/messages`, `/chat/commitments` | History and recorded commitments |
+| `POST` | `/github-webhook` | Signed push event |
 
-**Behaviour engine · :3002** — `GET /behavior/:userId`, `POST /git/update/:userId`, `GET /leaderboard`, `GET /health`, `GET /info`
+**Behaviour engine · :3002**: `GET /team`, `GET /behavior/:userId`, `POST /git/update/:userId`, `GET /leaderboard`, `GET /health`, `GET /info`
 
-**Task engine · :3000** — `POST /tasks/create`, `POST /tasks/assign`, `POST /users/create`
+**Task engine · :3000**: `GET /tasks`, `POST /tasks/suggest`, `POST /tasks/create`, `POST /tasks/assign`, `PATCH /tasks/:id`, `GET /users`, `POST /users/create`
+
+---
+
+## Repository layout
+
+```
+backend/
+  app.py                 Flask routes
+  db.py                  Shared Supabase client
+  chat.py, bot.py        Chat storage and message classification
+  alert_engine.py        Pure alert rules
+  github_events.py       Webhook signature, file fetch, commit recording
+  ai_features.py         Complexity heatmap and auto-refactor
+  services/code_analysis/  Syntax, quality, summary, LLM and scoring
+server.js                Behaviour engine
+index.js                 Task engine
+db.js                    Shared Supabase client for both engines
+frontend/src/            React console
+supabase/schema.sql      Tables, view and row-level security
+supabase/seed_demo.py    Sample data, created through the APIs
+```
 
 ---
 
@@ -201,26 +210,21 @@ curl -X POST localhost:3000/tasks/create \
 
 Stated here rather than discovered later:
 
-- **State is in memory.** Chat history, commitments and the analysis leaderboard
-  reset when the Flask process restarts. Only the behaviour engine persists, to
-  a local `behavior.json`. There is no database.
-- **The GitHub webhook is a stub.** It receives push events and reads commit
-  messages, but substitutes placeholder content instead of fetching the actual
-  diff, so commits aren't really scored yet. Wiring it to the contents API is the
-  obvious next step.
-- **The three services aren't integrated with each other.** The React console
-  calls the Flask backend only; the behaviour and task engines run standalone
-  and are exercised over HTTP. Unifying them behind one gateway is the next
-  piece of work.
-- **`POST /leaderboard` on the Flask service is broken** — it passes one
-  argument to a function that takes two, so the route raises. Use
-  `/analyze-and-rank`, which maintains its own ranking correctly.
-- **Quality heuristics are shallow by design** — `"def "` and `"test_"` substring
-  checks. They're a fast first pass, not static analysis.
-- **Python-only.** Syntax checking, complexity and refactoring all use Python's
-  `ast` and `radon`.
+- **No real authentication.** The first screen saves a name and skills, and anyone
+  can use any name. Squad codes are generated on screen but not stored or checked.
+- **Not ready to deploy.** The services have no access control and run on
+  development servers, so they're for local use as they stand.
+- **Scoring judges fit, not behaviour.** Running tests in a sandbox would be the
+  real fix.
+- **Names and IDs are mixed.** Submissions and chat store a display name, while
+  tasks and behaviour use a user ID, so renaming someone splits their history.
+- **Commit counting isn't atomic.** The webhook reads, adds one and writes, so two
+  simultaneous pushes can lose a count.
+- **`activity` is a running total.** It's `commits ÷ 24`, not a true 24-hour window.
+- **Python only.** Syntax checks, complexity and refactoring all use Python tools.
+- **SIMULATE PUSH writes demo data.** Real activity comes through the webhook.
 
 ---
 
-**Stack** — `Python` · `Flask` · `Node.js` · `Express` · `React` · `Vite` ·
-`TailwindCSS` · `Groq` · `radon` · `ast`
+**Stack**: `Python` · `Flask` · `Node.js` · `Express` · `React` · `Vite` ·
+`TailwindCSS` · `Supabase` · `PostgreSQL` · `Groq` · `radon` · `ast`

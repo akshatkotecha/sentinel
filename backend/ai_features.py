@@ -38,9 +38,60 @@ def bug_prediction_heatmap(code):
 # AUTO CODE REFACTOR
 # ---------------------------------
 
+class IndexedReadRewriter(ast.NodeTransformer):
+    """Replaces every read of array[index] with `item`."""
+
+    def __init__(self, array, index):
+        self.array = ast.dump(array)
+        self.index = index
+
+    def visit_Subscript(self, node):
+        if (
+            isinstance(node.ctx, ast.Load)
+            and isinstance(node.slice, ast.Name)
+            and node.slice.id == self.index
+            and ast.dump(node.value) == self.array
+        ):
+            return ast.Name(id="item", ctx=ast.Load())
+
+        return self.generic_visit(node)
+
+
+def _can_drop_index(node, array):
+    """True only if the index is used solely to read array[index]."""
+
+    if not isinstance(node.target, ast.Name):
+        return False
+
+    index = node.target.id
+    array_dump = ast.dump(array)
+    body = ast.Module(body=node.body + node.orelse, type_ignores=[])
+
+    allowed = set()
+    for child in ast.walk(body):
+        if isinstance(child, ast.Name) and child.id == "item":
+            return False
+        if (
+            isinstance(child, ast.Subscript)
+            and isinstance(child.ctx, ast.Load)
+            and isinstance(child.slice, ast.Name)
+            and child.slice.id == index
+            and ast.dump(child.value) == array_dump
+        ):
+            allowed.add(id(child.slice))
+
+    for child in ast.walk(body):
+        if isinstance(child, ast.Name) and child.id == index and id(child) not in allowed:
+            return False
+
+    return True
+
+
 class RefactorTransformer(ast.NodeTransformer):
 
     def visit_For(self, node):
+
+        self.generic_visit(node)
 
         if (
             isinstance(node.iter, ast.Call)
@@ -59,6 +110,14 @@ class RefactorTransformer(ast.NodeTransformer):
 
                 array_name = args[0].args[0]
 
+                # Loops that write to the array or use the index for anything
+                # else can't lose the index, so they're left unchanged.
+                if not _can_drop_index(node, array_name):
+                    return node
+
+                rewriter = IndexedReadRewriter(array_name, node.target.id)
+                node.body = [rewriter.visit(stmt) for stmt in node.body]
+                node.orelse = [rewriter.visit(stmt) for stmt in node.orelse]
                 node.target = ast.Name(id="item", ctx=ast.Store())
                 node.iter = array_name
 

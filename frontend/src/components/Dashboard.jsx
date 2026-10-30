@@ -1,9 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Activity, MessageSquare, AlertTriangle, GitCommit, Trophy, Zap, Send, ArrowRight, CheckCircle2, Plus, BellRing, UserMinus, TrendingUp, ShieldCheck, Code2, ChevronRight } from 'lucide-react';
+import { Activity, MessageSquare, GitCommit, Trophy, Zap, Send, ArrowRight, CheckCircle2, Plus, BellRing, UserMinus, TrendingUp, ShieldCheck, Code2, ChevronRight } from 'lucide-react';
 import CreateTaskModal from './CreateTaskModal';
+import { API, TASKS_API, BEHAVIOUR_API, request } from '../api';
 
-const API = 'http://localhost:5000';
+const STATUS_LABELS = { todo: 'TODO', in_progress: 'IN PROGRESS', done: 'DONE' };
+const BOT_NAMES = ['AI_Bot', 'SQUAD AI'];
 
 // ─── Code Analyser Panel ────────────────────────────────────────────────────
 function CodeAnalyser() {
@@ -84,9 +86,9 @@ function CodeAnalyser() {
                   <p className="text-xs text-gray-500 font-bold mb-3">CHECKS</p>
                   {[
                     ['Syntax OK', result.analysis.syntax_ok],
-                    ['Has Functions', result.analysis.quality_checks?.has_functions],
-                    ['Has Tests', result.analysis.quality_checks?.has_tests],
-                    ['Not Too Small', !result.analysis.quality_checks?.too_small],
+                    ['Has Functions', result.analysis.quality?.has_functions],
+                    ['Has Tests', result.analysis.quality?.has_tests],
+                    ['Not Too Small', !result.analysis.quality?.too_small],
                   ].map(([label, pass]) => (
                     <div key={label} className="flex justify-between text-xs">
                       <span className="text-gray-400">{label}</span>
@@ -96,10 +98,10 @@ function CodeAnalyser() {
                 </div>
 
                 {/* AI review */}
-                {result.analysis.llm_review && (
+                {result.analysis.llm_result && (
                   <div className="bg-gray-900 rounded-xl p-4 border border-cyan-500/20 text-xs text-gray-300 leading-relaxed">
                     <p className="text-cyan-400 font-bold mb-2">AI REVIEW</p>
-                    <p>{result.analysis.llm_review?.reasoning || result.analysis.llm_review}</p>
+                    <p>{result.analysis.llm_result.reason}</p>
                   </div>
                 )}
               </motion.div>
@@ -123,123 +125,98 @@ function CodeAnalyser() {
   );
 }
 
-// --- DATA: USERS (With Avatars) ---
-// We use 'seed' to generate consistent game-like avatars
-const MOCK_TEAM = [
-  { id: 2, name: 'Dev_Sarah', role: 'Backend', commits: 145, maxCommits: 200, speed: 12.5, accuracy: 98, trend: [4,2,5,8,3,9,12], avatarSeed: 'Sarah' }, 
-  { id: 3, name: 'Dev_Rohan', role: 'AI Eng', commits: 90, maxCommits: 200, speed: 8.2, accuracy: 92, trend: [2,3,2,4,1,5,8], avatarSeed: 'Rohan' },
-  { id: 4, name: 'Dev_Alex', role: 'Frontend', commits: 120, maxCommits: 200, speed: 10.1, accuracy: 95, trend: [5,6,4,7,8,5,10], avatarSeed: 'Alex' },
-];
-
-const INITIAL_TASKS = [
-  { id: 101, title: 'Auth API Integration', assignee: 'Dev_Sarah', status: 'IN PROGRESS', risk: 'low', type: 'Backend' },
-  { id: 102, title: 'Dashboard UI Animation', assignee: 'Dev_Alex', status: 'TODO', risk: 'medium', type: 'Frontend' },
-  { id: 103, title: 'Train ML Risk Model', assignee: 'Dev_Rohan', status: 'IN PROGRESS', risk: 'high', type: 'AI' },
-];
-
-const Sparkline = ({ data, color }) => {
-  const max = Math.max(...data);
-  const points = data.map((d, i) => `${(i / (data.length - 1)) * 60},${20 - (d / max) * 20}`).join(' ');
-  return (
-    <svg width="60" height="20" className="overflow-visible">
-      <polyline points={points} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-};
-
 export default function Dashboard({ userProfile }) {
   const [activeView, setActiveView] = useState('mission'); // 'mission' | 'analyser'
-  const [team, setTeam] = useState(() => {
-    const realUser = { 
-        id: 1, 
-        name: userProfile?.name || 'You', 
-        role: 'Team Lead', 
-        commits: 0, 
-        maxCommits: 200, 
-        speed: 0, 
-        accuracy: 100, 
-        trend: [0,0,0,0,0,0,0],
-        avatarSeed: userProfile?.name || 'You'
-    };
-    return [realUser, ...MOCK_TEAM].sort((a, b) => b.commits - a.commits);
-  });
-
-  const [tasks, setTasks] = useState(INITIAL_TASKS);
+  const [team, setTeam] = useState([]);
+  const [tasks, setTasks] = useState([]);
   const [alerts, setAlerts] = useState([]);
-  const [chatHistory, setChatHistory] = useState([{ id: 1, sender: 'SYSTEM', text: 'Velocity tracking active.', color: 'text-neon-blue' }]);
+  const [dismissed, setDismissed] = useState([]);
+  const [chatHistory, setChatHistory] = useState([]);
   const [chatMessage, setChatMessage] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const chatEndRef = useRef(null);
-  
-  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatHistory]);
+  const [loadError, setLoadError] = useState('');
+  const chatScrollRef = useRef(null);
 
-  const updateStatsForUser = (userName) => {
-    const newTeam = team.map(member => {
-      if (member.name === userName) {
-        const newTrend = [...member.trend.slice(1), Math.floor(Math.random() * 10) + 5];
-        return { 
-            ...member, 
-            commits: member.commits + 25,
-            speed: parseFloat((member.speed + 1.5).toFixed(1)), 
-            trend: newTrend
-        }; 
-      }
-      return member;
-    });
-    newTeam.sort((a, b) => b.commits - a.commits);
-    setTeam(newTeam);
+  const refresh = useCallback(async () => {
+    try {
+      const [teamData, taskData, alertData, messages] = await Promise.all([
+        request(`${BEHAVIOUR_API}/team`),
+        request(`${TASKS_API}/tasks`),
+        request(`${API}/alerts/live`),
+        request(`${API}/chat/messages`),
+      ]);
+      setTeam(teamData);
+      setAlerts(alertData.map(a => ({ ...a, id: `${a.user}-${a.type}` })));
+      setTasks(taskData.map(t => ({
+        ...t,
+        status: STATUS_LABELS[t.status],
+        risk: alertData.some(a => a.user === t.assignee) ? 'high' : 'low',
+      })));
+      setChatHistory(messages.map(m => ({
+        id: m.id,
+        sender: m.user,
+        text: m.text,
+        color: BOT_NAMES.includes(m.user) ? 'text-neon-blue' : 'text-cyan-300',
+      })));
+      setLoadError('');
+    } catch (e) {
+      setLoadError(e.message);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const timer = setInterval(refresh, 15000);
+    return () => clearInterval(timer);
+  }, [refresh]);
+
+  // Scrolls only the chat box. scrollIntoView would also scroll every ancestor,
+  // pushing the fixed panels up and cutting off the top of the page.
+  const messageCount = chatHistory.length;
+  useEffect(() => {
+    const box = chatScrollRef.current;
+    if (box) box.scrollTop = box.scrollHeight;
+  }, [messageCount]);
+
+  // Writes demo activity to the database for a random team member.
+  const simulateGitPush = async () => {
+    if (!team.length) return;
+    const user = team[Math.floor(Math.random() * team.length)];
+    await request(`${BEHAVIOUR_API}/git/update/${user.id}`, 'POST', { commits: user.commits + 1 }).catch(e => setLoadError(e.message));
+    refresh();
   };
 
-  const simulateGitPush = () => {
-    const randomUserIndex = Math.floor(Math.random() * team.length);
-    const newTeam = [...team];
-    const user = newTeam[randomUserIndex];
-    user.commits += 5;
-    user.speed = parseFloat((user.speed + 0.5).toFixed(1));
-    user.trend = [...user.trend.slice(1), Math.floor(Math.random() * 15)];
-    newTeam.sort((a, b) => b.commits - a.commits);
-    setTeam(newTeam);
+  const nudgeUser = async (alert) => {
+    setDismissed(prev => [...prev, alert.id]);
+    await request(`${API}/chat/send`, 'POST', { user: 'SQUAD AI', text: `@${alert.user} ${alert.reason}` }).catch(e => setLoadError(e.message));
+    refresh();
   };
 
-  const triggerRiskAlert = () => {
-    setAlerts([{ id: Date.now(), type: 'critical', user: 'Dev_Rohan', message: 'Accuracy dropped below 85%.', time: 'Just now' }, ...alerts]);
-  };
-
-  const nudgeUser = (userName, alertId) => {
-    setAlerts(alerts.filter(a => a.id !== alertId));
-    setChatHistory([...chatHistory, { id: Date.now(), sender: 'SQUAD AI', text: `@${userName} Quality check failed. Review your last commit.`, color: 'text-neon-red font-bold' }]);
-  };
-
-  const sendChatMessage = () => {
+  const sendChatMessage = async () => {
     if (!chatMessage.trim()) return;
-    setChatHistory(prev => [...prev, {
-      id: Date.now(),
-      sender: userProfile?.name || 'You',
-      text: chatMessage,
-      color: 'text-cyan-300'
-    }]);
-    fetch(`${API}/chat/send`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user: userProfile?.name || 'You', text: chatMessage }),
-    }).catch(() => {});
+    const text = chatMessage;
     setChatMessage('');
+    await request(`${API}/chat/send`, 'POST', { user: userProfile?.name || 'You', text }).catch(e => setLoadError(e.message));
+    refresh();
   };
 
-  const addTask = (data) => {
-    setTasks([{ id: Date.now(), title: data.title, assignee: data.assignee, status: 'TODO', risk: 'low', type: data.type }, ...tasks]);
+  const addTask = async ({ title, requiredSkills }) => {
     setIsModalOpen(false);
+    try {
+      const task = await request(`${TASKS_API}/tasks/create`, 'POST', { title, requiredSkills });
+      await request(`${TASKS_API}/tasks/assign`, 'POST', { taskId: task.id });
+    } catch (e) { setLoadError(e.message); }
+    refresh();
   };
 
-  const moveTask = (taskId) => {
-    const updatedTasks = tasks.map(t => {
-      if (t.id !== taskId) return t;
-      const newStatus = t.status === 'TODO' ? 'IN PROGRESS' : 'DONE';
-      if (newStatus === 'DONE') updateStatsForUser(t.assignee); 
-      return { ...t, status: newStatus };
-    });
-    setTasks(updatedTasks);
+  const moveTask = async (task) => {
+    const status = task.status === 'TODO' ? 'in_progress' : 'done';
+    await request(`${TASKS_API}/tasks/${task.id}`, 'PATCH', { status }).catch(e => setLoadError(e.message));
+    refresh();
   };
+
+  const maxCommits = Math.max(1, ...team.map(m => m.commits));
+  const visibleAlerts = alerts.filter(a => !dismissed.includes(a.id));
 
   // --- NEW: GAMER GRADIENTS ---
   const getProgressColor = (current, max) => {
@@ -259,7 +236,7 @@ export default function Dashboard({ userProfile }) {
 
   return (
     <div className="h-screen w-full flex flex-col bg-cyber-black overflow-hidden text-gray-300 font-sans">
-      <header className="h-14 border-b border-white/10 flex items-center justify-between px-6 bg-cyber-gray/50 backdrop-blur-md z-50">
+      <header className="h-14 flex-shrink-0 border-b border-white/10 flex items-center justify-between px-6 bg-cyber-gray/50 backdrop-blur-md z-50">
         <div className="flex items-center gap-4">
           <div className="text-xl font-bold tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-neon-blue to-neon-purple drop-shadow-[0_0_10px_rgba(188,19,254,0.5)]">SENTINEL</div>
           <div className="px-2 py-0.5 rounded bg-gray-800 border border-gray-700 text-[10px] text-gray-400 font-mono">V.2.0.1 LIVE</div>
@@ -267,14 +244,15 @@ export default function Dashboard({ userProfile }) {
         <div className="flex gap-3">
             <button onClick={() => setActiveView('mission')} className={`px-3 py-1 rounded text-xs font-mono border flex items-center gap-2 transition-all ${activeView === 'mission' ? 'bg-white/20 border-white/30 text-white' : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10'}`}><Activity className="w-3 h-3" /> MISSION</button>
             <button onClick={() => setActiveView('analyser')} className={`px-3 py-1 rounded text-xs font-mono border flex items-center gap-2 transition-all ${activeView === 'analyser' ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400' : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10'}`}><Code2 className="w-3 h-3" /> CODE ANALYSER</button>
-            <button onClick={triggerRiskAlert} className="bg-red-500/10 hover:bg-red-500/20 px-3 py-1 rounded text-xs font-mono border border-red-500/50 flex items-center gap-2 text-red-400 transition-all"><AlertTriangle className="w-3 h-3" /> TRIGGER RISK</button>
-            <button onClick={simulateGitPush} className="bg-white/10 hover:bg-white/20 px-3 py-1 rounded text-xs font-mono border border-white/10 flex items-center gap-2 transition-all"><Zap className="w-3 h-3 text-yellow-400" /> GIT PUSH</button>
+            <button onClick={simulateGitPush} className="bg-white/10 hover:bg-white/20 px-3 py-1 rounded text-xs font-mono border border-white/10 flex items-center gap-2 transition-all"><Zap className="w-3 h-3 text-yellow-400" /> SIMULATE PUSH</button>
         </div>
       </header>
 
-      <div className="flex-1 grid grid-cols-5 overflow-hidden">
+      {loadError && <div className="bg-red-500/20 border-b border-red-500/50 text-red-300 text-xs font-mono px-6 py-2">{loadError}</div>}
+
+      <div className="flex-1 min-h-0 grid grid-cols-5 grid-rows-[minmax(0,1fr)] overflow-hidden">
         {/* === LEFT: LEADERBOARD === */}
-        <aside className="col-span-1 border-r border-white/5 bg-black/20 p-4 flex flex-col overflow-y-auto">
+        <aside className="col-span-1 min-h-0 border-r border-white/5 bg-black/20 p-4 flex flex-col overflow-y-auto">
           <div className="flex items-center gap-2 mb-6 text-neon-purple"><Trophy className="w-5 h-5" /><h3 className="text-sm font-black tracking-widest uppercase text-white drop-shadow-md">RANKINGS</h3></div>
           <div className="space-y-4">
              <AnimatePresence>
@@ -292,7 +270,7 @@ export default function Dashboard({ userProfile }) {
                       <div className="flex items-center gap-3">
                          {/* AVATAR instead of initials */}
                          <div className="relative">
-                            <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${member.avatarSeed}`} alt="avatar" className="w-8 h-8 rounded-full border border-white/20 bg-gray-800" />
+                            <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${member.name}`} alt="avatar" className="w-8 h-8 rounded-full border border-white/20 bg-gray-800" />
                             <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold border border-black ${index === 0 ? 'bg-yellow-400 text-black' : index === 1 ? 'bg-gray-300 text-black' : index === 2 ? 'bg-orange-400 text-black' : 'bg-gray-700 text-gray-300'}`}>
                                 {index + 1}
                             </div>
@@ -303,20 +281,17 @@ export default function Dashboard({ userProfile }) {
                     </div>
 
                     <div className="h-2 w-full bg-gray-900 rounded-full overflow-hidden relative z-10 mb-3 border border-white/5">
-                       <motion.div className={`h-full rounded-full ${getProgressColor(member.commits, member.maxCommits)}`} initial={{ width: 0 }} animate={{ width: `${(member.commits / member.maxCommits) * 100}%` }} transition={{ duration: 0.8 }} />
+                       <motion.div className={`h-full rounded-full ${getProgressColor(member.commits, maxCommits)}`} initial={{ width: 0 }} animate={{ width: `${(member.commits / maxCommits) * 100}%` }} transition={{ duration: 0.8 }} />
                     </div>
 
                     <div className="grid grid-cols-2 gap-2 border-t border-white/5 pt-2 relative z-10">
                         <div className="flex flex-col">
                             <span className="text-[9px] text-gray-500 flex items-center gap-1"><TrendingUp className="w-3 h-3 text-neon-blue" /> VELOCITY</span>
-                            <div className="flex items-end gap-2">
-                                <span className="text-xs font-bold text-white font-mono">{member.speed}</span>
-                                <Sparkline data={member.trend} color={index === 0 ? '#facc15' : '#00f3ff'} /> 
-                            </div>
+                            <span className="text-xs font-bold text-white font-mono">{member.speed.toFixed(1)}</span>
                         </div>
                         <div className="flex flex-col items-end">
                             <span className="text-[9px] text-gray-500 flex items-center gap-1"><ShieldCheck className="w-3 h-3 text-green-400" /> ACCURACY</span>
-                            <span className="text-xs font-bold text-white font-mono">{member.accuracy}%</span>
+                            <span className="text-xs font-bold text-white font-mono">{Math.round(member.accuracy * 100)}%</span>
                         </div>
                     </div>
                  </motion.div>
@@ -327,13 +302,14 @@ export default function Dashboard({ userProfile }) {
 
         {/* === MIDDLE: TASK BOARD === */}
         {activeView === 'analyser' ? (
-          <main className="col-span-3 bg-gradient-to-b from-gray-900/50 to-black overflow-y-auto">
+          <main className="col-span-3 min-h-0 bg-gradient-to-b from-gray-900/50 to-black overflow-y-auto">
             <CodeAnalyser />
           </main>
         ) : (
-        <main className="col-span-3 bg-gradient-to-b from-gray-900/50 to-black p-6 relative overflow-y-auto">
+        <main className="col-span-3 min-h-0 relative bg-gradient-to-b from-gray-900/50 to-black">
+          <div className="h-full overflow-y-auto p-6 pb-28">
           <div className="flex items-center justify-between mb-8"><h2 className="text-3xl font-black text-white tracking-tight drop-shadow-lg italic">MISSION CONTROL</h2></div>
-          <div className="grid grid-cols-3 gap-6 h-full pb-20">
+          <div className="grid grid-cols-3 gap-6">
             {['TODO', 'IN PROGRESS', 'DONE'].map((status) => (
               <div key={status} className="flex flex-col h-full">
                  {/* BIGGER, BOLDER HEADERS */}
@@ -345,7 +321,7 @@ export default function Dashboard({ userProfile }) {
                  <div className="bg-white/5 rounded-2xl p-4 border border-white/5 flex-1 min-h-[400px] shadow-inner shadow-black/50">
                     <AnimatePresence>
                       {tasks.filter(t => t.status === status).map((task) => (
-                        <motion.div layoutId={task.id} key={task.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9 }} 
+                        <motion.div layoutId={String(task.id)} key={task.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9 }} 
                             className={`p-5 mb-4 rounded-xl border bg-gray-900/90 backdrop-blur-xl relative group transition-all hover:-translate-y-1 hover:shadow-2xl hover:shadow-black/50 
                             ${task.risk === 'high' ? 'border-red-500/50 shadow-[0_0_15px_rgba(220,38,38,0.2)]' : 'border-white/10 hover:border-neon-blue/40'}`}
                         >
@@ -356,12 +332,13 @@ export default function Dashboard({ userProfile }) {
                             <span className={`text-[10px] font-bold px-2 py-1 rounded border ${getTypeStyles(task.type)}`}>{task.type.toUpperCase()}</span>
                             
                             {/* PROFILE PIC ON TASK */}
-                            <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${task.assignee}`} alt="assignee" className="w-6 h-6 rounded-full border border-white/30 bg-gray-800" />
+                            <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${task.assignee || 'unassigned'}`} alt="assignee" className="w-6 h-6 rounded-full border border-white/30 bg-gray-800" />
                           </div>
                           
-                          <h4 className="text-base font-bold text-white mb-4 leading-snug">{task.title}</h4>
+                          <h4 className="text-base font-bold text-white mb-1 leading-snug">{task.title}</h4>
+                          <p className="text-[10px] text-gray-500 font-mono mb-4">{task.assignee || 'UNASSIGNED'}</p>
                           
-                          {status !== 'DONE' && <button onClick={() => moveTask(task.id)} className="w-full py-2 rounded-lg bg-white/5 hover:bg-neon-blue/20 border border-white/10 hover:border-neon-blue/50 text-xs font-bold text-gray-400 hover:text-neon-blue transition-all flex items-center justify-center gap-2 group-hover:opacity-100 opacity-80"><span>{status === 'TODO' ? 'INITIALIZE' : 'COMMIT'}</span> <ArrowRight className="w-3 h-3" /></button>}
+                          {status !== 'DONE' && <button onClick={() => moveTask(task)} className="w-full py-2 rounded-lg bg-white/5 hover:bg-neon-blue/20 border border-white/10 hover:border-neon-blue/50 text-xs font-bold text-gray-400 hover:text-neon-blue transition-all flex items-center justify-center gap-2 group-hover:opacity-100 opacity-80"><span>{status === 'TODO' ? 'INITIALIZE' : 'COMMIT'}</span> <ArrowRight className="w-3 h-3" /></button>}
                           {status === 'DONE' && <div className="text-xs text-green-400 flex items-center justify-center gap-2 font-black mt-2 bg-green-500/10 py-1 rounded"><CheckCircle2 className="w-3 h-3" /> DEPLOYED</div>}
                         </motion.div>
                       ))}
@@ -370,22 +347,23 @@ export default function Dashboard({ userProfile }) {
               </div>
             ))}
           </div>
-          <button onClick={() => setIsModalOpen(true)} className="absolute bottom-10 right-10 w-16 h-16 bg-neon-blue rounded-full text-black flex items-center justify-center shadow-[0_0_40px_rgba(0,243,255,0.6)] hover:scale-110 hover:rotate-90 transition-all z-40 group"><Plus className="w-8 h-8 stroke-[3px]" /></button>
+          </div>
+          <button onClick={() => setIsModalOpen(true)} className="absolute bottom-8 right-8 w-16 h-16 bg-neon-blue rounded-full text-black flex items-center justify-center shadow-[0_0_40px_rgba(0,243,255,0.6)] hover:scale-110 hover:rotate-90 transition-all z-40 group"><Plus className="w-8 h-8 stroke-[3px]" /></button>
         </main>
         )}
 
         {/* === RIGHT: ALERTS === */}
-        <aside className="col-span-1 border-l border-white/5 bg-black/40 backdrop-blur-xl p-4 flex flex-col h-full">
-          <div className="mb-6 flex-shrink-0">
+        <aside className="col-span-1 min-h-0 border-l border-white/5 bg-black/40 backdrop-blur-xl p-4 flex flex-col h-full">
+          <div className="mb-4 flex-shrink-0 max-h-[45%] overflow-y-auto">
             <div className="flex items-center gap-2 mb-4 text-neon-red animate-pulse"><BellRing className="w-5 h-5" /><h3 className="text-sm font-black tracking-widest uppercase">LIVE ALERTS</h3></div>
             <div className="space-y-3">
                <AnimatePresence>
-                 {alerts.length === 0 && <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-4 bg-gray-800/50 border border-white/5 rounded-xl text-xs text-gray-500 text-center italic">Scanning for anomalies...</motion.div>}
-                 {alerts.map((alert) => (
+                 {visibleAlerts.length === 0 && <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-4 bg-gray-800/50 border border-white/5 rounded-xl text-xs text-gray-500 text-center italic">Scanning for anomalies...</motion.div>}
+                 {visibleAlerts.map((alert) => (
                    <motion.div key={alert.id} initial={{ x: 50, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: 50, opacity: 0 }} className="p-4 bg-red-950/30 border-l-4 border-red-500 rounded-r-xl text-xs relative overflow-hidden shadow-[0_0_15px_rgba(220,38,38,0.1)]">
-                     <div className="flex justify-between items-start mb-2"><span className="font-black text-red-500 text-sm">CRITICAL FAULT</span><span className="text-[9px] text-red-400 font-mono">{alert.time}</span></div>
-                     <span className="text-gray-300 text-xs block mb-3 leading-relaxed">{alert.message}</span>
-                     <button onClick={() => nudgeUser(alert.user, alert.id)} className="w-full py-2 bg-red-500 hover:bg-red-400 text-white text-xs font-bold rounded flex items-center justify-center gap-2 transition-all shadow-lg shadow-red-900/50"><UserMinus className="w-3 h-3" /> NUDGE {alert.user.toUpperCase()}</button>
+                     <div className="flex justify-between items-start mb-2"><span className="font-black text-red-500 text-sm">{alert.type.replace('_', ' ')}</span><span className="text-[9px] text-red-400 font-mono">{alert.severity}</span></div>
+                     <span className="text-gray-300 text-xs block mb-3 leading-relaxed">{alert.reason}</span>
+                     <button onClick={() => nudgeUser(alert)} className="w-full py-2 bg-red-500 hover:bg-red-400 text-white text-xs font-bold rounded flex items-center justify-center gap-2 transition-all shadow-lg shadow-red-900/50"><UserMinus className="w-3 h-3" /> NUDGE {alert.user.toUpperCase()}</button>
                    </motion.div>
                  ))}
                </AnimatePresence>
@@ -393,9 +371,8 @@ export default function Dashboard({ userProfile }) {
           </div>
           <div className="flex-1 flex flex-col border-t border-white/10 pt-4 min-h-0">
              <div className="flex items-center gap-2 mb-4 text-neon-blue"><MessageSquare className="w-4 h-4" /><h3 className="text-xs font-bold tracking-widest uppercase">SQUAD_AI</h3></div>
-            <div className="flex-1 bg-black/40 rounded-xl border border-white/5 p-4 mb-3 text-xs overflow-y-auto font-mono scrollbar-thin scrollbar-thumb-gray-700">
+            <div ref={chatScrollRef} className="flex-1 min-h-0 bg-black/40 rounded-xl border border-white/5 p-4 mb-3 text-xs overflow-y-auto font-mono">
                {chatHistory.map(msg => (<div key={msg.id} className={`mb-3 ${msg.color || 'text-gray-400'}`}><span className="font-bold opacity-70">[{msg.sender}]:</span> {msg.text}</div>))}
-               <div ref={chatEndRef} />
             </div>
             <div className="relative"><input type="text" value={chatMessage} onChange={(e) => setChatMessage(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendChatMessage()} placeholder="Send command..." className="w-full bg-gray-900 border border-white/10 rounded-xl p-3 pr-10 text-xs text-white focus:border-neon-blue outline-none transition-colors shadow-inner" /><Send className="w-4 h-4 text-gray-500 absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer hover:text-white transition-colors" onClick={sendChatMessage} /></div>
           </div>

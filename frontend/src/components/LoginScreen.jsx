@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Github, User, Code2, FolderGit2, Users, Rocket, Copy, Check, ArrowRight, Terminal } from 'lucide-react';
+import { User, Users, Rocket, Copy, Check, ArrowRight, Terminal } from 'lucide-react';
+import { TASKS_API, request } from '../api';
 
 export default function LoginScreen({ onLogin }) {
-  const [step, setStep] = useState(1);
+  const [step, setStep] = useState(2);
+  const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -15,13 +17,21 @@ export default function LoginScreen({ onLogin }) {
 
   // --- ACTIONS ---
 
-  const handleGitAuth = () => {
+  const saveProfile = async () => {
+    const id = profile.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    if (!id) { setError('Enter a codename first.'); return; }
+
+    const skills = profile.stacks.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
     setLoading(true);
-    setTimeout(() => {
+    setError('');
+    try {
+      await request(`${TASKS_API}/users/create`, 'POST', { id, name: profile.name.trim(), skills });
+      setStep(3);
+    } catch (e) {
+      setError(e.message);
+    } finally {
       setLoading(false);
-      setProfile({ ...profile, name: 'Dev_User_01' }); // Simulate fetching name
-      setStep(2);
-    }, 1500);
+    }
   };
 
   const generateTeamCode = () => {
@@ -56,7 +66,7 @@ export default function LoginScreen({ onLogin }) {
             PROTOCOL: INITIALIZATION
           </motion.div>
           <h1 className="text-4xl font-bold text-white tracking-tighter mb-1">SENTINEL</h1>
-          <p className="text-gray-500 text-xs font-mono tracking-widest">STEP {step}/4</p>
+          <p className="text-gray-500 text-xs font-mono tracking-widest">STEP {Math.min(step - 1, 3)}/3</p>
         </div>
 
         {/* MAIN CARD */}
@@ -64,22 +74,6 @@ export default function LoginScreen({ onLogin }) {
           
           <AnimatePresence mode='wait'>
             
-            {/* === STEP 1: GIT AUTH === */}
-            {step === 1 && (
-              <motion.div key="s1" initial={{ x: 20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: -20, opacity: 0 }} className="space-y-6 text-center">
-                <div className="w-20 h-20 bg-gray-800 rounded-full mx-auto flex items-center justify-center border border-gray-700 shadow-[0_0_30px_rgba(0,0,0,0.5)]">
-                  <Github className="w-10 h-10 text-white" />
-                </div>
-                <div>
-                  <h2 className="text-xl font-bold text-white">Identity Verification</h2>
-                  <p className="text-gray-500 text-sm mt-2">Connect GitHub to import commit history and reputation score.</p>
-                </div>
-                <button onClick={handleGitAuth} className="w-full bg-[#24292e] hover:bg-white hover:text-black text-white p-4 rounded-xl font-mono flex items-center justify-center gap-3 transition-all border border-gray-700 group">
-                   {loading ? <span className="animate-pulse">HANDSHAKE IN PROGRESS...</span> : <><Github className="w-5 h-5" /> <span>AUTHENTICATE</span></>}
-                </button>
-              </motion.div>
-            )}
-
             {/* === STEP 2: PROFILE CREATION === */}
             {step === 2 && (
               <motion.div key="s2" initial={{ x: 20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: -20, opacity: 0 }} className="space-y-4">
@@ -95,7 +89,7 @@ export default function LoginScreen({ onLogin }) {
                    </div>
                    <div className="bg-black/30 p-3 rounded-lg border border-white/10">
                       <label className="text-[10px] text-gray-500 font-mono block mb-1">TECH STACK (COMMA SEPARATED)</label>
-                      <input type="text" placeholder="React, Python, AWS..." value={profile.stacks} onChange={e => setProfile({...profile, stacks: e.target.value})} className="w-full bg-transparent text-white outline-none placeholder:text-gray-700" />
+                      <input type="text" placeholder="frontend, backend, ml, react, node, python..." value={profile.stacks} onChange={e => setProfile({...profile, stacks: e.target.value})} className="w-full bg-transparent text-white outline-none placeholder:text-gray-700" />
                    </div>
                    <div className="bg-black/30 p-3 rounded-lg border border-white/10">
                       <label className="text-[10px] text-gray-500 font-mono block mb-1">PREVIOUS PROJECTS</label>
@@ -103,7 +97,8 @@ export default function LoginScreen({ onLogin }) {
                    </div>
                 </div>
 
-                <button onClick={() => setStep(3)} className="w-full bg-neon-blue text-black p-4 rounded-xl font-bold flex items-center justify-center gap-2 hover:shadow-[0_0_20px_rgba(0,243,255,0.4)] transition-all mt-4">
+                {error && <p className="text-red-400 text-xs font-mono">{error}</p>}
+                <button onClick={saveProfile} disabled={loading} className="w-full bg-neon-blue text-black p-4 rounded-xl font-bold flex items-center justify-center gap-2 hover:shadow-[0_0_20px_rgba(0,243,255,0.4)] transition-all mt-4">
                    CONFIRM DATA <ArrowRight className="w-4 h-4" />
                 </button>
               </motion.div>
@@ -205,7 +200,7 @@ export default function LoginScreen({ onLogin }) {
         </div>
 
         {/* Back Button (Only for steps > 1) */}
-        {step > 1 && step !== 4 && (
+        {step > 2 && step !== 4 && (
             <button onClick={() => setStep(step - 1)} className="absolute -bottom-12 left-1/2 -translate-x-1/2 text-gray-500 text-xs hover:text-white underline">
                 Back to previous step
             </button>

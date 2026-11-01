@@ -1,8 +1,10 @@
+# SHARED DATABASE CONNECTION for all the Flask code.
 import os
 
 import httpx
 from supabase import ClientOptions, create_client
 
+# Created once on first use, then reused by every request.
 _client = None
 
 

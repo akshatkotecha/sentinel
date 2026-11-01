@@ -1,22 +1,31 @@
+// THE MAIN SCREEN: rankings on the left, task board or Code Analyser in the middle,
+// alerts and chat on the right.
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Activity, MessageSquare, GitCommit, Trophy, Zap, Send, ArrowRight, CheckCircle2, Plus, BellRing, UserMinus, TrendingUp, ShieldCheck, Code2, ChevronRight } from 'lucide-react';
 import CreateTaskModal from './CreateTaskModal';
 import { API, TASKS_API, BEHAVIOUR_API, request } from '../api';
 
+// Converts database status values into the column headings shown on screen.
 const STATUS_LABELS = { todo: 'TODO', in_progress: 'IN PROGRESS', done: 'DONE' };
 const BOT_NAMES = ['AI_Bot', 'SQUAD AI'];
+// The languages the analyser can score. 'auto' asks the backend to detect it.
+const LANGUAGES = { auto: 'Auto-detect', python: 'Python', javascript: 'JavaScript', typescript: 'TypeScript', java: 'Java', cpp: 'C/C++', go: 'Go' };
 
 // ─── Code Analyser Panel ────────────────────────────────────────────────────
+// Paste code, send it to Flask, and show the score and the rankings.
 function CodeAnalyser() {
+  // The inputs, loading flag, result and error each have their own state.
   const [name, setName] = useState('');
   const [title, setTitle] = useState('');
   const [code, setCode] = useState('');
+  const [language, setLanguage] = useState('auto');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [tab, setTab] = useState('analysis');
 
+  // Sends the code to Flask. `finally` turns off loading whether it worked or failed.
   const submit = async () => {
     if (!code.trim()) { setError('Paste some code first.'); return; }
     setError(''); setLoading(true); setResult(null);
@@ -24,15 +33,17 @@ function CodeAnalyser() {
       const res = await fetch(`${API}/analyze-and-rank`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user: name || 'Anonymous', code, title: title || 'Untitled', expected_outputs: [] }),
+        body: JSON.stringify({ user: name || 'Anonymous', code, title: title || 'Untitled', language, expected_outputs: [] }),
       });
-      if (!res.ok) throw new Error(await res.text());
-      setResult(await res.json());
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Server error');
+      setResult(data);
       setTab('analysis');
     } catch (e) { setError(e.message || 'Server error'); }
     finally { setLoading(false); }
   };
 
+  // ?. and ?? keep this safe while there is no result yet. Colour depends on the score.
   const score = result?.analysis?.final_score ?? null;
   const scoreColor = score >= 75 ? '#22c55e' : score >= 45 ? '#f59e0b' : '#ef4444';
 
@@ -41,7 +52,10 @@ function CodeAnalyser() {
       <h2 className="text-2xl font-black text-white tracking-tight italic">CODE ANALYSER</h2>
 
       {/* Inputs */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-3 gap-3">
+        <select value={language} onChange={e=>setLanguage(e.target.value)} className="order-last bg-gray-900 border border-white/10 rounded-lg px-3 py-2 text-white text-xs focus:border-cyan-400 outline-none">
+          {Object.entries(LANGUAGES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
         <input value={name} onChange={e=>setName(e.target.value)} placeholder="Your name" className="bg-gray-900 border border-white/10 rounded-lg px-3 py-2 text-white text-xs focus:border-cyan-400 outline-none" />
         <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Task title (optional)" className="bg-gray-900 border border-white/10 rounded-lg px-3 py-2 text-white text-xs focus:border-cyan-400 outline-none" />
       </div>
@@ -54,6 +68,7 @@ function CodeAnalyser() {
       </button>
 
       {/* Results */}
+      {/* && means: only show this part once there is a result. */}
       {result && (
         <div className="space-y-4">
           {/* Tab switcher */}
@@ -73,7 +88,7 @@ function CodeAnalyser() {
                 <div className="flex items-center gap-6 p-5 bg-gray-900 rounded-2xl border border-white/10">
                   <div className="text-5xl font-black" style={{color: scoreColor}}>{Math.round(score ?? 0)}</div>
                   <div className="flex-1">
-                    <div className="text-xs text-gray-400 mb-2">OVERALL SCORE</div>
+                    <div className="text-xs text-gray-400 mb-2">OVERALL SCORE · {LANGUAGES[result.analysis.language]}</div>
                     <div className="h-3 bg-gray-800 rounded-full overflow-hidden">
                       <motion.div className="h-full rounded-full" style={{background: scoreColor}} initial={{width:0}} animate={{width:`${score}%`}} transition={{duration:0.8}} />
                     </div>
@@ -84,6 +99,7 @@ function CodeAnalyser() {
                 {/* Checks */}
                 <div className="bg-gray-900 rounded-xl p-4 border border-white/10 space-y-2">
                   <p className="text-xs text-gray-500 font-bold mb-3">CHECKS</p>
+                  {/* .map() turns an array of data into an array of screen elements. */}
                   {[
                     ['Syntax OK', result.analysis.syntax_ok],
                     ['Has Functions', result.analysis.quality?.has_functions],
@@ -96,6 +112,8 @@ function CodeAnalyser() {
                     </div>
                   ))}
                 </div>
+
+                {result.analysis.syntax_error && <p className="text-red-400 text-xs font-mono">{result.analysis.syntax_error}</p>}
 
                 {/* AI review */}
                 {result.analysis.llm_result && (
@@ -126,6 +144,7 @@ function CodeAnalyser() {
 }
 
 export default function Dashboard({ userProfile }) {
+  // All the data on this screen. When any of it changes, React redraws the screen.
   const [activeView, setActiveView] = useState('mission'); // 'mission' | 'analyser'
   const [team, setTeam] = useState([]);
   const [tasks, setTasks] = useState([]);
@@ -135,8 +154,11 @@ export default function Dashboard({ userProfile }) {
   const [chatMessage, setChatMessage] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [loadError, setLoadError] = useState('');
+  // useRef gives direct access to the chat box element, to control its scrolling.
   const chatScrollRef = useRef(null);
 
+  // Loads all the screen's data from the three services at once. If any call fails,
+  // a red error banner is shown. useCallback keeps this the same function between renders.
   const refresh = useCallback(async () => {
     try {
       const [teamData, taskData, alertData, messages] = await Promise.all([
@@ -150,6 +172,7 @@ export default function Dashboard({ userProfile }) {
       setTasks(taskData.map(t => ({
         ...t,
         status: STATUS_LABELS[t.status],
+        // A task is marked high risk if its assignee has any active alert.
         risk: alertData.some(a => a.user === t.assignee) ? 'high' : 'low',
       })));
       setChatHistory(messages.map(m => ({
@@ -164,6 +187,8 @@ export default function Dashboard({ userProfile }) {
     }
   }, []);
 
+  // Polling: load once on opening, then every 15 seconds. The returned function stops
+  // the timer when the component is removed, which prevents a memory leak.
   useEffect(() => {
     refresh();
     const timer = setInterval(refresh, 15000);
@@ -179,13 +204,17 @@ export default function Dashboard({ userProfile }) {
   }, [messageCount]);
 
   // Writes demo activity to the database for a random team member.
+  // Demo button: there's no real push, but the database write is real.
   const simulateGitPush = async () => {
     if (!team.length) return;
-    const user = team[Math.floor(Math.random() * team.length)];
+    // Credits the logged-in person, or a random team member if they aren't on the team.
+    const user = team.find(m => m.name === userProfile?.name) || team[Math.floor(Math.random() * team.length)];
     await request(`${BEHAVIOUR_API}/git/update/${user.id}`, 'POST', { commits: user.commits + 1 }).catch(e => setLoadError(e.message));
     refresh();
   };
 
+  // Posts a reminder in chat and hides the alert. `dismissed` is only in memory, so
+  // the alert comes back after a page refresh if the problem still exists.
   const nudgeUser = async (alert) => {
     setDismissed(prev => [...prev, alert.id]);
     await request(`${API}/chat/send`, 'POST', { user: 'SQUAD AI', text: `@${alert.user} ${alert.reason}` }).catch(e => setLoadError(e.message));
@@ -200,6 +229,7 @@ export default function Dashboard({ userProfile }) {
     refresh();
   };
 
+  // Two steps: create the task, then ask the task engine to assign it.
   const addTask = async ({ title, requiredSkills }) => {
     setIsModalOpen(false);
     try {
@@ -209,12 +239,14 @@ export default function Dashboard({ userProfile }) {
     refresh();
   };
 
+  // Moves a task one column forward: TODO -> in progress -> done.
   const moveTask = async (task) => {
     const status = task.status === 'TODO' ? 'in_progress' : 'done';
     await request(`${TASKS_API}/tasks/${task.id}`, 'PATCH', { status }).catch(e => setLoadError(e.message));
     refresh();
   };
 
+  // The top committer sets the full-width bar. Math.max with 1 avoids dividing by zero.
   const maxCommits = Math.max(1, ...team.map(m => m.commits));
   const visibleAlerts = alerts.filter(a => !dismissed.includes(a.id));
 
@@ -248,6 +280,7 @@ export default function Dashboard({ userProfile }) {
         </div>
       </header>
 
+      {/* Red banner, shown only when a request to the backend has failed. */}
       {loadError && <div className="bg-red-500/20 border-b border-red-500/50 text-red-300 text-xs font-mono px-6 py-2">{loadError}</div>}
 
       <div className="flex-1 min-h-0 grid grid-cols-5 grid-rows-[minmax(0,1fr)] overflow-hidden">
@@ -255,6 +288,7 @@ export default function Dashboard({ userProfile }) {
         <aside className="col-span-1 min-h-0 border-r border-white/5 bg-black/20 p-4 flex flex-col overflow-y-auto">
           <div className="flex items-center gap-2 mb-6 text-neon-purple"><Trophy className="w-5 h-5" /><h3 className="text-sm font-black tracking-widest uppercase text-white drop-shadow-md">RANKINGS</h3></div>
           <div className="space-y-4">
+             {/* One card per team member. The team is already sorted by commits, so index is the rank. */}
              <AnimatePresence>
                {team.map((member, index) => (
                  <motion.div layout key={member.id} initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} 
@@ -301,6 +335,7 @@ export default function Dashboard({ userProfile }) {
         </aside>
 
         {/* === MIDDLE: TASK BOARD === */}
+        {/* The middle panel shows either the Code Analyser or the task board. */}
         {activeView === 'analyser' ? (
           <main className="col-span-3 min-h-0 bg-gradient-to-b from-gray-900/50 to-black overflow-y-auto">
             <CodeAnalyser />
@@ -310,6 +345,7 @@ export default function Dashboard({ userProfile }) {
           <div className="h-full overflow-y-auto p-6 pb-28">
           <div className="flex items-center justify-between mb-8"><h2 className="text-3xl font-black text-white tracking-tight drop-shadow-lg italic">MISSION CONTROL</h2></div>
           <div className="grid grid-cols-3 gap-6">
+            {/* Builds the three columns. Each one shows only the tasks with its status. */}
             {['TODO', 'IN PROGRESS', 'DONE'].map((status) => (
               <div key={status} className="flex flex-col h-full">
                  {/* BIGGER, BOLDER HEADERS */}
@@ -348,6 +384,7 @@ export default function Dashboard({ userProfile }) {
             ))}
           </div>
           </div>
+          {/* The + button opens the new task pop-up. */}
           <button onClick={() => setIsModalOpen(true)} className="absolute bottom-8 right-8 w-16 h-16 bg-neon-blue rounded-full text-black flex items-center justify-center shadow-[0_0_40px_rgba(0,243,255,0.6)] hover:scale-110 hover:rotate-90 transition-all z-40 group"><Plus className="w-8 h-8 stroke-[3px]" /></button>
         </main>
         )}
@@ -357,6 +394,7 @@ export default function Dashboard({ userProfile }) {
           <div className="mb-4 flex-shrink-0 max-h-[45%] overflow-y-auto">
             <div className="flex items-center gap-2 mb-4 text-neon-red animate-pulse"><BellRing className="w-5 h-5" /><h3 className="text-sm font-black tracking-widest uppercase">LIVE ALERTS</h3></div>
             <div className="space-y-3">
+               {/* AnimatePresence lets an alert animate out before it is removed. */}
                <AnimatePresence>
                  {visibleAlerts.length === 0 && <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-4 bg-gray-800/50 border border-white/5 rounded-xl text-xs text-gray-500 text-center italic">Scanning for anomalies...</motion.div>}
                  {visibleAlerts.map((alert) => (
@@ -374,11 +412,13 @@ export default function Dashboard({ userProfile }) {
             <div ref={chatScrollRef} className="flex-1 min-h-0 bg-black/40 rounded-xl border border-white/5 p-4 mb-3 text-xs overflow-y-auto font-mono">
                {chatHistory.map(msg => (<div key={msg.id} className={`mb-3 ${msg.color || 'text-gray-400'}`}><span className="font-bold opacity-70">[{msg.sender}]:</span> {msg.text}</div>))}
             </div>
+            {/* Controlled input: React state holds the text. Enter or the icon sends it. */}
             <div className="relative"><input type="text" value={chatMessage} onChange={(e) => setChatMessage(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendChatMessage()} placeholder="Send command..." className="w-full bg-gray-900 border border-white/10 rounded-xl p-3 pr-10 text-xs text-white focus:border-neon-blue outline-none transition-colors shadow-inner" /><Send className="w-4 h-4 text-gray-500 absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer hover:text-white transition-colors" onClick={sendChatMessage} /></div>
           </div>
         </aside>
       </div>
 
+      {/* Passing addTask as onClone is how the pop-up sends its task back here. */}
       <CreateTaskModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} onClone={addTask} />
     </div>
   );

@@ -5,3 +5,11 @@ groq
 radon
 supabase
 httpx
+tree-sitter
+tree-sitter-python
+tree-sitter-javascript
+tree-sitter-typescript
+tree-sitter-java
+tree-sitter-cpp
+tree-sitter-go
+pytest

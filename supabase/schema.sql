@@ -1,5 +1,6 @@
 -- Sentinel database schema. Run once in the Supabase SQL editor.
 
+-- Team members. skills is an array, used to match people to tasks.
 create table public.users (
   id text primary key,
   name text not null,
@@ -8,6 +9,8 @@ create table public.users (
   created_at timestamptz not null default now()
 );
 
+-- Work items. The check rule on status blocks invalid values at the database level.
+-- assigned_to is a foreign key: if that user is deleted, the task becomes unassigned.
 create table public.tasks (
   id bigint generated always as identity primary key,
   title text not null,
@@ -19,8 +22,10 @@ create table public.tasks (
   deadline timestamptz,
   created_at timestamptz not null default now()
 );
+-- Makes lookups by assignee faster.
 create index tasks_assigned_to_idx on public.tasks (assigned_to);
 
+-- Git activity, one row per user. Deleting a user also deletes their row (cascade).
 create table public.behavior (
   user_id text primary key references public.users (id) on delete cascade,
   commits integer not null default 0,
@@ -40,11 +45,13 @@ create table public.submissions (
   quality jsonb,
   summary jsonb,
   llm_result jsonb,
+  -- Where the submission came from: 'console' or 'github'. Not the code.
   source text,
   created_at timestamptz not null default now()
 );
 create index submissions_user_name_idx on public.submissions (user_name);
 
+-- Chat history, including the bot's replies.
 create table public.chat_messages (
   id bigint generated always as identity primary key,
   user_name text not null,
@@ -53,6 +60,7 @@ create table public.chat_messages (
   created_at timestamptz not null default now()
 );
 
+-- Each user's latest promise made in chat.
 create table public.commitments (
   user_name text primary key,
   message text not null,

@@ -62,10 +62,14 @@ its keys stay on the server.
 A submission gets a weighted composite, and the model is only one term:
 
 ```python
-final_score = 0.2 * syntax_score    # ast.parse(): it parses or it doesn't
+final_score = 0.2 * syntax_score    # it parses or it doesn't, without being run
             + 0.3 * quality_score   # has functions, isn't a stub, has tests
             + 0.5 * llm_score       # a Groq-hosted model judging fit to the task
 ```
+
+- **Six languages.** Python, JavaScript, TypeScript, Java, C/C++ and Go are parsed
+  with tree-sitter, and Python's syntax check uses `ast`. The language is detected or
+  chosen, and anything else gets a clear error instead of a misleading score.
 
 - **The LLM sees a summary, not the source.** Signatures and length are extracted
   first, and only those are sent. The database stores the same summary and the
@@ -118,9 +122,12 @@ Git activity becomes signals rather than raw counts:
 - **`INACTIVITY`**: no Git activity for 12+ hours
 - **`DEADLINE_RISK`**: under 24 hours to the deadline, with low activity
 - **`PROGRESS_MISMATCH`**: the ticket says in progress, Git says otherwise
+- **`BROKEN_PROMISE`**: someone made a commitment in chat, and no commit followed
+  within `PROMISE_GRACE_MINUTES` (a day by default)
 
-The GitHub webhook feeds this with real pushes. It rejects anything without a
-valid HMAC signature, records the commit, and scores each changed `.py` file.
+The GitHub webhook is built to feed this from pushes, and has been tested with
+simulated ones. It rejects anything without a valid HMAC signature, records the
+commit, and scores each changed file in a supported language.
 
 ---
 
@@ -147,14 +154,15 @@ npm install
 pip install -r backend/requirements.txt
 # In a new Supabase project, run supabase/schema.sql once in the SQL editor
 
-# 1. Start each service in its own terminal
-(cd backend && python app.py)           # :5001
-node server.js                          # :3002
-node index.js                           # :3000
-(cd frontend && npm run dev)            # :5173
+# 1. Start all four services (Ctrl+C stops them all). Needs a venv at backend/venv:
+#    py -m venv backend/venv, then install the requirements with its Python
+npm start                               # :5001 :3002 :3000 :5173
 
 # 2. Optional: fill an empty database with sample data
 python supabase/seed_demo.py
+
+# 3. Run the tests. They need no database or API key, and write nothing.
+cd backend && venv/Scripts/python -m pytest tests
 ```
 
 Then open http://localhost:5173.
@@ -195,10 +203,12 @@ backend/
   alert_engine.py        Pure alert rules
   github_events.py       Webhook signature, file fetch, commit recording
   ai_features.py         Complexity heatmap and auto-refactor
-  services/code_analysis/  Syntax, quality, summary, LLM and scoring
-server.js                Behaviour engine
-index.js                 Task engine
-db.js                    Shared Supabase client for both engines
+  services/code_analysis/  Language support, syntax, quality, summary, LLM and scoring
+  tests/                 Language, scoring, alert and webhook tests
+  server.js              Behaviour engine (Express)
+  index.js               Task engine (Express)
+  db.js                  Shared Supabase client for both engines
+start.js                 Starts all four services with npm start
 frontend/src/            React console
 supabase/schema.sql      Tables, view and row-level security
 supabase/seed_demo.py    Sample data, created through the APIs
@@ -221,10 +231,27 @@ Stated here rather than discovered later:
 - **Commit counting isn't atomic.** The webhook reads, adds one and writes, so two
   simultaneous pushes can lose a count.
 - **`activity` is a running total.** It's `commits ÷ 24`, not a true 24-hour window.
-- **Python only.** Syntax checks, complexity and refactoring all use Python tools.
-- **SIMULATE PUSH writes demo data.** Real activity comes through the webhook.
+- **Limited language detection.** Scoring covers six languages, but similar ones can
+  be confused: C# can read as Java. The heatmap and auto-refactor are still Python only.
+- **The webhook isn't connected to a live repo.** Its logic has been tested with
+  simulated signed pushes, with the database and LLM replaced by stand-ins.
+- **SIMULATE PUSH writes demo data.** It adds a commit to someone's activity.
+
+---
+
+## Future work
+
+Sentinel is a prototype. In this order, the next steps are:
+
+1. **Live GitHub connection.** Connect through a GitHub App, so an admin can install
+   it in one click.
+2. **Identity.** Add "Sign in with GitHub" and link each profile to its GitHub username.
+3. **Security.** Add login checks on every route and turn off debug mode.
+4. **Real teams.** Store squads properly, so each team only sees its own data.
+5. **Better analysis.** Run submitted tests in a sandbox, replace the keyword matching
+   for task assignment and chat, and add more languages.
 
 ---
 
 **Stack**: `Python` · `Flask` · `Node.js` · `Express` · `React` · `Vite` ·
-`TailwindCSS` · `Supabase` · `PostgreSQL` · `Groq` · `radon` · `ast`
+`TailwindCSS` · `Supabase` · `PostgreSQL` · `Groq` · `tree-sitter` · `radon` · `ast` · `pytest`

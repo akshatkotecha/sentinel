@@ -1,3 +1,4 @@
+# CHAT BOT: simple keyword rules, with no LLM involved.
 vague_words = [
     "almost", "soon", "trying", "working",
     "maybe", "nearly"
@@ -8,6 +9,7 @@ commitment_words = [
     "tomorrow", "will finish", "done by"
 ]
 
+# Vague words are checked first, so "almost done by eod" counts as vague.
 def classify_message(text):
     t = text.lower()
     for w in vague_words:
@@ -18,6 +20,7 @@ def classify_message(text):
             return "commitment"
     return "normal"
 
+# Returns the bot's reply, or None if it should stay quiet.
 def bot_reply(msg_type):
     if msg_type == "vague":
         return "🤖 That sounds unclear. Any blockers or ETA?"

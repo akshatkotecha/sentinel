@@ -3,7 +3,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { User, Users, Rocket, Copy, Check, ArrowRight, Terminal } from 'lucide-react';
 import { TASKS_API, request } from '../api';
 
+// The setup flow: profile -> create or join a squad -> dashboard.
+// There is no real authentication. Only the profile reaches the database.
 export default function LoginScreen({ onLogin }) {
+  // Starts at 2 because the old step 1, a fake GitHub login, was removed.
   const [step, setStep] = useState(2);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -17,10 +20,14 @@ export default function LoginScreen({ onLogin }) {
 
   // --- ACTIONS ---
 
+  // Saves the profile through the task engine. Name and skills are stored; previous
+  // projects stay in the browser.
   const saveProfile = async () => {
+    // Builds a clean id from the name: "Aditi Rao" -> "aditi-rao".
     const id = profile.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
     if (!id) { setError('Enter a codename first.'); return; }
 
+    // "React, Python" -> ['react', 'python']. filter(Boolean) removes empty entries.
     const skills = profile.stacks.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
     setLoading(true);
     setError('');
@@ -34,6 +41,8 @@ export default function LoginScreen({ onLogin }) {
     }
   };
 
+  // Makes a random code in the browser, after a short delay for effect. It isn't saved
+  // anywhere, and joining doesn't check it, so squads aren't real yet.
   const generateTeamCode = () => {
     if (!teamData.name || !teamData.title) return;
     setLoading(true);
@@ -50,6 +59,7 @@ export default function LoginScreen({ onLogin }) {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // Passes the details up to App, which switches to the dashboard.
   const enterDashboard = () => {
     onLogin(generatedCode || joinCode, profile);
   };
@@ -136,6 +146,7 @@ export default function LoginScreen({ onLogin }) {
             {/* === STEP 4: CREATE TEAM (LEADER) === */}
             {step === 4 && (
               <motion.div key="s4" initial={{ x: 20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: -20, opacity: 0 }} className="space-y-4">
+                {/* Show the form until a code exists, then show the code. */}
                 {!generatedCode ? (
                   // FORM
                   <>

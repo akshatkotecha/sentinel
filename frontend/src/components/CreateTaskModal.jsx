@@ -3,6 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { X, Sparkles, Bot, Zap, ArrowRight } from 'lucide-react';
 import { TASKS_API, request } from '../api';
 
+// The pop-up for a new task. It previews who would be assigned as you type.
+// Props: isOpen (show it or not), onClose (close it), onClone (save the task).
 export default function CreateTaskModal({ isOpen, onClose, onClone }) {
   const [title, setTitle] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -21,6 +23,8 @@ export default function CreateTaskModal({ isOpen, onClose, onClone }) {
     setAiDecision(null);
     setError('');
 
+    // Debounce: wait until typing pauses for 500ms, so each keystroke doesn't call
+    // the server. `cancelled` makes sure a slow old response can't overwrite a newer one.
     let cancelled = false;
     const timeoutId = setTimeout(async () => {
         try {
@@ -33,12 +37,14 @@ export default function CreateTaskModal({ isOpen, onClose, onClone }) {
         }
     }, 500);
 
+    // Cleanup: React runs this before the next run, cancelling the previous timer.
     return () => { cancelled = true; clearTimeout(timeoutId); };
   }, [title]);
 
   const handleSubmit = () => {
     if (!title || !aiDecision) return;
 
+    // Hands the task to Dashboard's addTask, which does the actual saving.
     onClone({ title, requiredSkills: aiDecision.requiredSkills });
 
     // Reset and close
@@ -47,6 +53,8 @@ export default function CreateTaskModal({ isOpen, onClose, onClone }) {
     onClose();
   };
 
+  // Returning null means draw nothing. This comes after the hooks because React
+  // needs the same hooks to run, in the same order, on every render.
   if (!isOpen) return null;
 
   return (
@@ -101,6 +109,7 @@ export default function CreateTaskModal({ isOpen, onClose, onClone }) {
             {/* AI Analysis Result */}
             <div className="min-h-[100px] bg-black/40 rounded-xl border border-white/5 p-4 flex flex-col justify-center relative overflow-hidden transition-all">
                 
+                {/* Chained conditions: empty, loading, error, no match, or a match found. */}
                 {!title ? (
                     <div className="flex flex-col items-center justify-center text-gray-700 gap-2">
                         <Bot className="w-8 h-8 opacity-50" />

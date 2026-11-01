@@ -1,3 +1,4 @@
+# EXTRA API FEATURES: available as routes, but not shown in the dashboard.
 import ast
 from radon.complexity import cc_visit
 
@@ -6,6 +7,8 @@ from radon.complexity import cc_visit
 # BUG PREDICTION HEATMAP
 # ---------------------------------
 
+# radon measures cyclomatic complexity, which is roughly the number of different
+# paths through a function. More paths are harder to test, so bugs are more likely.
 def bug_prediction_heatmap(code):
 
     try:
@@ -38,6 +41,8 @@ def bug_prediction_heatmap(code):
 # AUTO CODE REFACTOR
 # ---------------------------------
 
+# Works on the AST (Abstract Syntax Tree), which is Python's tree form of the code.
+# Example: `for i in range(len(nums)): print(nums[i])` -> `for item in nums: print(item)`
 class IndexedReadRewriter(ast.NodeTransformer):
     """Replaces every read of array[index] with `item`."""
 
@@ -67,6 +72,7 @@ def _can_drop_index(node, array):
     array_dump = ast.dump(array)
     body = ast.Module(body=node.body + node.orelse, type_ignores=[])
 
+    # First pass: note each use of the index that is a simple array[index] read.
     allowed = set()
     for child in ast.walk(body):
         if isinstance(child, ast.Name) and child.id == "item":
@@ -80,6 +86,7 @@ def _can_drop_index(node, array):
         ):
             allowed.add(id(child.slice))
 
+    # Second pass: any other use of the index means the rewrite isn't safe.
     for child in ast.walk(body):
         if isinstance(child, ast.Name) and child.id == index and id(child) not in allowed:
             return False
@@ -87,6 +94,7 @@ def _can_drop_index(node, array):
     return True
 
 
+# Finds `for x in range(len(something))` loops and rewrites the safe ones.
 class RefactorTransformer(ast.NodeTransformer):
 
     def visit_For(self, node):
@@ -124,6 +132,8 @@ class RefactorTransformer(ast.NodeTransformer):
         return node
 
 
+# Code -> tree -> change the tree -> code. Comments are lost, because the AST
+# doesn't contain them.
 def auto_refactor(code):
 
     try:

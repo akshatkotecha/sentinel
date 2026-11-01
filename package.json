@@ -2,8 +2,9 @@
   "name": "sentinel-behaviour-engine",
   "version": "1.0.0",
   "description": "Git-telemetry behaviour engine — commit activity, staleness and risk scoring for Sentinel",
-  "main": "server.js",
+  "main": "backend/server.js",
   "scripts": {
+    "start": "node start.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [

@@ -1,9 +1,12 @@
+# Blends behaviour (60%) and code score (40%). Only POST /leaderboard uses this;
+# the dashboard's leaderboard comes from the database view instead.
 def compute_leaderboard(users_behavior, users_code_score):
 
     leaderboard = []
 
     for user, behavior in users_behavior.items():
 
+        # Normalize: scale each value to 0-1 so they can be fairly combined.
         norm_activity = min(behavior["activity"] / 5, 1)
         norm_speed = min(behavior["speed"] / 1, 1)
         norm_consistency = behavior["consistency"]

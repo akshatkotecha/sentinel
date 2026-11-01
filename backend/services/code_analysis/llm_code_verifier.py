@@ -11,6 +11,7 @@ GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
 LLM_ATTEMPTS = 4
 
 
+# Sends one request to Groq and returns the parsed JSON answer.
 def _ask_llm(client, task, code_summary):
 
     response = client.chat.completions.create(
@@ -40,11 +41,14 @@ Reply with JSON only:
 
 TASK: {task.get("title")}
 EXPECTED OUTPUTS (what the code should produce when run, NOT required function names): {task.get("expected_outputs")}
+LANGUAGE: {code_summary['language']}
 FUNCTIONS: {code_summary['functions']}
 CLASSES: {code_summary['classes']}
 SOURCE LENGTH: {code_summary['length']} characters
 """
         }],
+        # temperature=0 makes answers as repeatable as possible, and response_format
+        # asks the model for valid JSON that the code can read.
         temperature=0,
         response_format={"type": "json_object"},
     )
@@ -52,6 +56,8 @@ SOURCE LENGTH: {code_summary['length']} characters
     return json.loads(response.choices[0].message.content)
 
 
+# Tries several times. If every attempt fails, it returns a neutral score of 60,
+# so an outage at Groq doesn't stop the app or give the user a zero.
 def verify_code_with_llm(task, code_summary, api_key):
 
     for _ in range(LLM_ATTEMPTS):
